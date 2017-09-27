@@ -5,6 +5,7 @@ import random
 
 import matplotlib.pyplot as plt
 import numpy as np
+import tensorflow as tf
 from keras.datasets import mnist
 from keras.layers import Input
 from keras.layers.advanced_activations import LeakyReLU
@@ -13,7 +14,12 @@ from keras.layers.core import Reshape, Dense, Dropout, Activation, Flatten
 from keras.layers.normalization import BatchNormalization
 from keras.models import Model
 from keras.optimizers import Adam
+from progressbar import ProgressBar
 
+sess = tf.Session()
+from keras import backend as K
+
+K.set_session(sess)
 random.seed(42)
 losses = {"d": [], "g": []}  # set up loss storage vector
 
@@ -101,7 +107,7 @@ class Discriminator(object):
 
 
 class GAN(object):
-    def __init__(self, nch, gen, dis, lr=0.0001):
+    def __init__(self, nch, gen, dis, lr=0.001):
         # Build stacked GAN model
         self.nch = nch
         self.lr = lr
@@ -109,18 +115,17 @@ class GAN(object):
         h = gen.model(self.gan_in)
         gan_v = dis.model(h)
         self.model = Model(self.gan_in, gan_v)
-        self.model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.lr))
+        self.model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=lr))
         print("\nGAN Summary:")
         self.model.summary()
 
     def change_lr(self, lr):
         self.lr = lr
         self.model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=self.lr))
-        self.model.summary()
+        print("\nLearning rate changed...")
 
 
 def load_mnist_data(rows, cols):
-    # load the data, shuffled and split between train and test sets
     (xtrain, ytrain), (xtest, ytest) = mnist.load_data()
     xtrain = xtrain.reshape(xtrain.shape[0], 1, rows, cols)
     xtest = xtest.reshape(xtest.shape[0], 1, rows, cols)
@@ -154,12 +159,10 @@ def plot_real(xtrain, n_ex=16, dim=(4, 4), figsize=(10, 10)):
 
 
 # Set up our main training loop
-def train_for_n(gen, dis, gan, xtrain, nb_epoch=5000, plt_frq=25, batch_size=32, lr_g=0.0001, lr_d=0.001):
-    for e in range(nb_epoch):
-        # adapt learning rates
-        gen.change_lr(lr_g)
-        dis.change_lr(lr_d)
-
+def train_for_n(gen, dis, gan, xtrain, epochs=5000, plt_frq=25, batch_size=32):
+    print("\nTraining for %i epochs..." % epochs)
+    pbar = ProgressBar()
+    for e in pbar(range(epochs)):
         # Make generative images
         image_batch = xtrain[np.random.randint(0, xtrain.shape[0], size=batch_size), :, :, :]
         noise_g = np.random.uniform(0, 1, size=[batch_size, 100])
@@ -171,7 +174,7 @@ def train_for_n(gen, dis, gan, xtrain, nb_epoch=5000, plt_frq=25, batch_size=32,
         y[0:batch_size, 1] = 1
         y[batch_size:, 0] = 1
 
-        # make_trainable(discriminator,True)
+        dis.make_trainable(True)
         d_loss = dis.model.train_on_batch(x, y)
         losses["d"].append(d_loss)
 
@@ -218,8 +221,9 @@ def main():
     y[:n, 1] = 1
     y[n:, 0] = 1
 
+    print("\nPre-training discriminator...")
     discriminator.make_trainable(True)
-    discriminator.model.fit(x, y, nb_epoch=1, batch_size=128)
+    discriminator.model.fit(x, y, epochs=1, batch_size=128)
     y_hat = discriminator.model.predict(x)
 
     # Measure accuracy of pre-trained discriminator network
@@ -229,16 +233,22 @@ def main():
     n_tot = y.shape[0]
     n_rig = (diff == 0).sum()
     acc = n_rig * 100.0 / n_tot
-    print("Accuracy: %0.02f pct (%d of %d) right" % (acc, n_rig, n_tot))
+    print("Accuracy: %0.02f pct, (%d of %d) right" % (acc, n_rig, n_tot))
 
-    # Train for 6000 epochs at original learning rates
-    train_for_n(generator, discriminator, gan, x_train, nb_epoch=500, plt_frq=50, batch_size=32)
+    # Train for 500 epochs at original learning rates
+    train_for_n(generator, discriminator, gan, x_train, epochs=500, plt_frq=500, batch_size=32)
+
+    # Train for 4000 epochs at reduced learning rates
+    gan.change_lr(lr=1e-4)
+    train_for_n(generator, discriminator, gan, x_train, epochs=4000, plt_frq=1000, batch_size=32)
 
     # Train for 2000 epochs at reduced learning rates
-    train_for_n(generator, discriminator, gan, x_train, nb_epoch=200, plt_frq=50, batch_size=32, lr_g=1e-5, lr_d=1e-4)
+    gan.change_lr(lr=1e-5)
+    train_for_n(generator, discriminator, gan, x_train, epochs=2000, plt_frq=1000, batch_size=32)
 
     # Train for 2000 epochs at reduced learning rates
-    train_for_n(generator, discriminator, gan, x_train, nb_epoch=200, plt_frq=50, batch_size=32, lr_g=1e-6, lr_d=1e-5)
+    gan.change_lr(lr=1e-6)
+    train_for_n(generator, discriminator, gan, x_train, epochs=2000, plt_frq=1000, batch_size=32)
 
     # Plot the final loss curves
     plot_loss(losses)
